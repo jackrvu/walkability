@@ -28,7 +28,7 @@ const SPEED = 1;
 /**
  * Player movement speed (data‑space units per second).
  */
-const PLAYER_SPEED = 5;
+const PLAYER_SPEED = 2;
 
 /**
  * A minimal 2‑D map that you can pan around with WASD.
@@ -128,6 +128,32 @@ const ArticleMap: React.FC = () => {
                 canvas.width / 2 - player.current.x * scale,
                 canvas.height / 2 - player.current.y * scale
             );
+
+            // Draw the grid
+            const gridSize = 1; // 1 unit = 1 grid cell
+            const startX = Math.floor(player.current.x - MAX_VISIBLE_UNITS);
+            const startY = Math.floor(player.current.y - MAX_VISIBLE_UNITS);
+            const endX = Math.ceil(player.current.x + MAX_VISIBLE_UNITS);
+            const endY = Math.ceil(player.current.y + MAX_VISIBLE_UNITS);
+
+            ctx.strokeStyle = "#e0e0e0";
+            ctx.lineWidth = 0.5;
+
+            // Draw vertical lines
+            for (let x = startX; x <= endX; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x * scale, startY * scale);
+                ctx.lineTo(x * scale, endY * scale);
+                ctx.stroke();
+            }
+
+            // Draw horizontal lines
+            for (let y = startY; y <= endY; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(startX * scale, y * scale);
+                ctx.lineTo(endX * scale, y * scale);
+                ctx.stroke();
+            }
 
             // Draw each article as a circle
             (articles as ArticlePoint[]).forEach(({ x, y }) => {
