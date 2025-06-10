@@ -21,6 +21,14 @@ n_clusters = max(1, len(X) // 100)
 kmeans = KMeans(n_clusters=n_clusters, random_state=42)
 clusters = kmeans.fit_predict(X)
 
+# Add cluster labels to articles
+for article, cluster in zip(articles, clusters):
+    article['cluster'] = int(cluster)
+
+# Save articles with cluster labels
+with open('articles_clustered.json', 'w') as f:
+    json.dump(articles, f, indent=2)
+
 # Create the scatter plot
 plt.figure(figsize=(10, 8))
 plt.scatter(x_coords, y_coords, c=clusters, cmap='tab20', alpha=0.6)
