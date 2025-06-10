@@ -1,5 +1,4 @@
 import React, { useEffect, useRef } from "react";
-// Vite lets you import JSON directly; adjust the path if this file lives elsewhere
 import articles from "../articles_clustered_normalized.json";
 
 interface ArticlePoint {
@@ -7,159 +6,121 @@ interface ArticlePoint {
     x: number;
     y: number;
     title: string;
-    // extend with other fields as you flesh things out
 }
 
-interface Player {
-    x: number;
-    y: number;
-}
+interface Vec2 { x: number; y: number; }
 
-/**
- * Maximum visible units in either direction from the center
- */
-const MAX_VISIBLE_UNITS = 10;
+/** ------------------------ Tunables ------------------------------------ */
+const MAX_VISIBLE_UNITS = 2;         // half-width of the view in world units
+const PLAYER_SPEED = 0.5;        // units / s
+const FIXED_DT = 1 / 120;    // logic step (s) -- 120 Hz
+const MAX_CATCHUP_STEPS = 5;          // safety against long tab-pause
+/** ---------------------------------------------------------------------- */
 
-/**
- * Camera movement speed (data‑space units per second).
- */
-const SPEED = 1;
-
-/**
- * Player movement speed (data‑space units per second).
- */
-const PLAYER_SPEED = 2;
-
-/**
- * A minimal 2‑D map that you can pan around with WASD.
- * It draws every article as a small blue dot on an <canvas> element.
- *
- * Skeleton‑style: no external rendering libs, ultra‑readable, ready for expansion.
- */
 const ArticleMap: React.FC = () => {
-    const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
 
-    /**
-     * Track the player's position in world space
-     */
-    const player = useRef<Player>({ x: 0, y: 0 });
-
-    /**
-     * Store which keys are currently pressed.
-     */
+    // *mutable* refs so the main loop doesn't re-subscribe on every tick
+    const player = useRef<Vec2>({ x: 0, y: 0 });
     const keys = useRef<Set<string>>(new Set());
+    const cursorWorldPos = useRef<Vec2>({ x: 0, y: 0 });
+    const fpsRef = useRef<number>(0);
 
-    /**
-     * Calculate the appropriate scale based on screen dimensions
-     * to maintain the desired FOV
-     */
-    const calculateScale = (width: number, height: number): number => {
-        // Use the smaller dimension to determine scale
-        const smallerDimension = Math.min(width, height);
-        // Scale should be such that 2 * MAX_VISIBLE_UNITS units fit in the smaller dimension
-        return smallerDimension / (2 * MAX_VISIBLE_UNITS);
-    };
+    /** Convert canvas size → world-unit scale so that 2·MAX_VISIBLE_UNITS fits */
+    const scaleFor = (width: number, height: number) =>
+        Math.min(width, height) / (2 * MAX_VISIBLE_UNITS);
 
-    // === Input handling ======================================================
+    /* ---------------------------- Input ---------------------------------- */
     useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => keys.current.add(e.key.toLowerCase());
-        const handleKeyUp = (e: KeyboardEvent) => keys.current.delete(e.key.toLowerCase());
-
-        window.addEventListener("keydown", handleKeyDown);
-        window.addEventListener("keyup", handleKeyUp);
-        return () => {
-            window.removeEventListener("keydown", handleKeyDown);
-            window.removeEventListener("keyup", handleKeyUp);
-        };
+        const dn = (e: KeyboardEvent) => keys.current.add(e.key.toLowerCase());
+        const up = (e: KeyboardEvent) => keys.current.delete(e.key.toLowerCase());
+        window.addEventListener("keydown", dn);
+        window.addEventListener("keyup", up);
+        return () => { window.removeEventListener("keydown", dn); window.removeEventListener("keyup", up); };
     }, []);
 
-    // === Handle window resize ===============================================
-    useEffect(() => {
-        const handleResize = () => {
-            const canvas = canvasRef.current;
-            if (!canvas) return;
-
-            // Set canvas size to match window size
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        };
-
-        // Initial size
-        handleResize();
-
-        // Add resize listener
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
-
-    // === Main draw loop ======================================================
+    /* ------------------------ Resize canvas ------------------------------ */
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
+        const fit = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
+        fit();
+        window.addEventListener("resize", fit);
+        return () => window.removeEventListener("resize", fit);
+    }, []);
 
-        let last = performance.now();
+    /* ------------------------- Mouse world-coords ------------------------ */
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
 
-        const frame = (now: DOMHighResTimeStamp) => {
-            const dt = (now - last) / 1000; // seconds since previous frame
-            last = now;
+        const move = (e: MouseEvent) => {
+            const rect = canvas.getBoundingClientRect();
+            const scale = scaleFor(canvas.width, canvas.height);
+            cursorWorldPos.current = {
+                x: (e.clientX - rect.left - canvas.width / 2) / scale + player.current.x,
+                y: (e.clientY - rect.top - canvas.height / 2) / scale + player.current.y,
+            };
+        };
+        canvas.addEventListener("mousemove", move);
+        return () => canvas.removeEventListener("mousemove", move);
+    }, []);
 
-            // --- Update player position ---------------------------------------------------
+    /* --------------------------- Game loop ------------------------------- */
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d")!;
+        let lastTime = performance.now();
+        let accumulator = 0;
+        let frames = 0, fpsTime = 0;
+
+        const update = (dt: number) => {
+            /* ---- player movement (fixed dt) ---- */
             const dir = { x: 0, y: 0 };
             if (keys.current.has("w")) dir.y -= 1;
             if (keys.current.has("s")) dir.y += 1;
             if (keys.current.has("a")) dir.x -= 1;
             if (keys.current.has("d")) dir.x += 1;
-
             const len = Math.hypot(dir.x, dir.y) || 1;
             player.current.x += (dir.x / len) * PLAYER_SPEED * dt;
             player.current.y += (dir.y / len) * PLAYER_SPEED * dt;
+        };
 
-            // --- Render ----------------------------------------------------------
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const render = () => {
+            const { width: w, height: h } = canvas;
+            const scale = scaleFor(w, h);
+            ctx.clearRect(0, 0, w, h);
 
-            // Calculate current scale based on canvas dimensions
-            const scale = calculateScale(canvas.width, canvas.height);
-
-            // Place the world so that the player appears at canvas center
+            /* ---- world transform so player is centered ---- */
             ctx.save();
-            ctx.translate(
-                canvas.width / 2 - player.current.x * scale,
-                canvas.height / 2 - player.current.y * scale
-            );
+            ctx.translate(w / 2 - player.current.x * scale,
+                h / 2 - player.current.y * scale);
 
-            // Draw the grid
-            const gridSize = 1; // 1 unit = 1 grid cell
+            /* ---- grid ---- */
+            ctx.strokeStyle = "#e0e0e0";
+            ctx.lineWidth = 0.5;
             const startX = Math.floor(player.current.x - MAX_VISIBLE_UNITS);
             const startY = Math.floor(player.current.y - MAX_VISIBLE_UNITS);
             const endX = Math.ceil(player.current.x + MAX_VISIBLE_UNITS);
             const endY = Math.ceil(player.current.y + MAX_VISIBLE_UNITS);
 
-            ctx.strokeStyle = "#e0e0e0";
-            ctx.lineWidth = 0.5;
-
-            // Draw vertical lines
-            for (let x = startX; x <= endX; x += gridSize) {
+            for (let x = startX; x <= endX; x++) {
                 ctx.beginPath();
                 ctx.moveTo(x * scale, startY * scale);
                 ctx.lineTo(x * scale, endY * scale);
                 ctx.stroke();
             }
-
-            // Draw horizontal lines
-            for (let y = startY; y <= endY; y += gridSize) {
+            for (let y = startY; y <= endY; y++) {
                 ctx.beginPath();
                 ctx.moveTo(startX * scale, y * scale);
                 ctx.lineTo(endX * scale, y * scale);
                 ctx.stroke();
             }
 
-            // Draw each article as a circle
+            /* ---- articles ---- */
             (articles as ArticlePoint[]).forEach(({ x, y }) => {
-                // Only draw points that are within the visible area
-                const dx = x - player.current.x;
-                const dy = y - player.current.y;
+                const dx = x - player.current.x, dy = y - player.current.y;
                 if (Math.abs(dx) <= MAX_VISIBLE_UNITS && Math.abs(dy) <= MAX_VISIBLE_UNITS) {
                     ctx.beginPath();
                     ctx.arc(x * scale, y * scale, 4, 0, Math.PI * 2);
@@ -168,20 +129,50 @@ const ArticleMap: React.FC = () => {
                 }
             });
 
-            // Draw the player
+            /* ---- player ---- */
             ctx.beginPath();
             ctx.arc(player.current.x * scale, player.current.y * scale, 8, 0, Math.PI * 2);
             ctx.fillStyle = "#ff0000";
             ctx.fill();
-
             ctx.restore();
-            requestAnimationFrame(frame);
+
+            /* ---- overlays (screen space) ---- */
+            ctx.fillStyle = "rgba(0,0,0,.7)";
+            ctx.fillRect(10, 10, 160, 32);
+            ctx.font = "14px monospace";
+            ctx.fillStyle = "white";
+            const c = cursorWorldPos.current;
+            ctx.fillText(`(${c.x.toFixed(2)}, ${c.y.toFixed(2)})`, 18, 32);
+
+            ctx.fillStyle = "rgba(0,0,0,.7)";
+            ctx.fillRect(w - 90, 10, 80, 32);
+            ctx.fillStyle = "white";
+            ctx.fillText(`${fpsRef.current} FPS`, w - 78, 32);
         };
 
-        requestAnimationFrame(frame);
+        const loop = (now: number) => {
+            const delta = (now - lastTime) / 1000;
+            lastTime = now;
+            accumulator += Math.min(delta, MAX_CATCHUP_STEPS * FIXED_DT); // clamp
+
+            while (accumulator >= FIXED_DT) {
+                update(FIXED_DT);
+                accumulator -= FIXED_DT;
+            }
+
+            render();
+
+            /* --- FPS counter --- */
+            frames++; fpsTime += delta;
+            if (fpsTime >= 1) { fpsRef.current = frames; frames = 0; fpsTime = 0; }
+
+            requestAnimationFrame(loop);
+        };
+
+        requestAnimationFrame(loop);
     }, []);
 
-    // === Canvas element ======================================================
+    /* ----------------------------- JSX ----------------------------------- */
     return (
         <canvas
             ref={canvasRef}
@@ -190,7 +181,7 @@ const ArticleMap: React.FC = () => {
                 background: "#f9f9f9",
                 border: "1px solid #ccc",
                 width: "100vw",
-                height: "100vh"
+                height: "100vh",
             }}
         />
     );
