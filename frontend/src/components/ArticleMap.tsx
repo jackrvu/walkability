@@ -10,6 +10,11 @@ interface ArticlePoint {
     // extend with other fields as you flesh things out
 }
 
+interface Player {
+    x: number;
+    y: number;
+}
+
 /**
  * Maximum visible units in either direction from the center
  */
@@ -21,6 +26,11 @@ const MAX_VISIBLE_UNITS = 10;
 const SPEED = 1;
 
 /**
+ * Player movement speed (data‑space units per second).
+ */
+const PLAYER_SPEED = 5;
+
+/**
  * A minimal 2‑D map that you can pan around with WASD.
  * It draws every article as a small blue dot on an <canvas> element.
  *
@@ -30,10 +40,9 @@ const ArticleMap: React.FC = () => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
     /**
-     * Track the camera (world‑space position of the screen center).
-     * Using useRef instead of state avoids forcing React re‑renders ~60×/s.
+     * Track the player's position in world space
      */
-    const camera = useRef({ x: 0, y: 0 });
+    const player = useRef<Player>({ x: 0, y: 0 });
 
     /**
      * Store which keys are currently pressed.
@@ -96,7 +105,7 @@ const ArticleMap: React.FC = () => {
             const dt = (now - last) / 1000; // seconds since previous frame
             last = now;
 
-            // --- Update camera ---------------------------------------------------
+            // --- Update player position ---------------------------------------------------
             const dir = { x: 0, y: 0 };
             if (keys.current.has("w")) dir.y -= 1;
             if (keys.current.has("s")) dir.y += 1;
@@ -104,8 +113,8 @@ const ArticleMap: React.FC = () => {
             if (keys.current.has("d")) dir.x += 1;
 
             const len = Math.hypot(dir.x, dir.y) || 1;
-            camera.current.x += (dir.x / len) * SPEED * dt;
-            camera.current.y += (dir.y / len) * SPEED * dt;
+            player.current.x += (dir.x / len) * PLAYER_SPEED * dt;
+            player.current.y += (dir.y / len) * PLAYER_SPEED * dt;
 
             // --- Render ----------------------------------------------------------
             ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -113,18 +122,18 @@ const ArticleMap: React.FC = () => {
             // Calculate current scale based on canvas dimensions
             const scale = calculateScale(canvas.width, canvas.height);
 
-            // Place the world so that (camera.x, camera.y) appears at canvas center
+            // Place the world so that the player appears at canvas center
             ctx.save();
             ctx.translate(
-                canvas.width / 2 - camera.current.x * scale,
-                canvas.height / 2 - camera.current.y * scale
+                canvas.width / 2 - player.current.x * scale,
+                canvas.height / 2 - player.current.y * scale
             );
 
             // Draw each article as a circle
             (articles as ArticlePoint[]).forEach(({ x, y }) => {
                 // Only draw points that are within the visible area
-                const dx = x - camera.current.x;
-                const dy = y - camera.current.y;
+                const dx = x - player.current.x;
+                const dy = y - player.current.y;
                 if (Math.abs(dx) <= MAX_VISIBLE_UNITS && Math.abs(dy) <= MAX_VISIBLE_UNITS) {
                     ctx.beginPath();
                     ctx.arc(x * scale, y * scale, 4, 0, Math.PI * 2);
@@ -132,6 +141,12 @@ const ArticleMap: React.FC = () => {
                     ctx.fill();
                 }
             });
+
+            // Draw the player
+            ctx.beginPath();
+            ctx.arc(player.current.x * scale, player.current.y * scale, 8, 0, Math.PI * 2);
+            ctx.fillStyle = "#ff0000";
+            ctx.fill();
 
             ctx.restore();
             requestAnimationFrame(frame);
