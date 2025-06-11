@@ -1,7 +1,7 @@
 import json
 
 # Read the JSON file
-with open('articles.json', 'r') as f:
+with open('articles_clustered.json', 'r') as f:
     articles = json.load(f)
 
 # Extract x and y coordinates
